@@ -1,9 +1,10 @@
 package main
 
 import (
+	"strings"
 	"sync"
-	"fmt"
 )
+
 
 /**
  * Graph Node object
@@ -17,21 +18,21 @@ type Node struct {
 /**
  * Add a parent to the node
  */
-func (self *Node) addParent(parent *Node) {
-	self.parents = append(self.parents, parent)
+func (n *Node) AddParent(parent *Node) {
+	n.parents = append(n.parents, parent)
 }
 
 /**
  * Remove all the node's parents
  */
-func (self *Node) clearParents() {
-	self.parents = make([]*Node, 0)
+func (n *Node) ClearParents() {
+	n.parents = make([]*Node, 0)
 }
 
 /**
  * Create a new Node
  */
-func newNode(value string, depth int) (n *Node) {
+func NewNode(value string, depth int) (n *Node) {
 	n = &Node {
 		value: value,
 		depth: depth,
@@ -52,44 +53,31 @@ func newNode(value string, depth int) (n *Node) {
  * The graph also manages the Queue in a way that make the search "breadth-first"-like
  */
 type Graph struct {
-	stop chan bool         // Stop workers
-	done chan bool         // Notify main loop
-	mut *sync.Mutex        // Protects the following
-	index map[string]*Node // Node index
-	queue *Queue           // Link queue to parse
-	endLabel string        // Link we're lokking for
-	endNode *Node          // Result
+	index map[string]*Node
+	mut *sync.Mutex
 }
 
-/**
- * Add a new node to the grapg and return it.
- * Checks whether it already exists before adding it.
- */
-func (self *Graph) add(value string, depth int) *Node {
+func (g *Graph) Set(value string, depth int, children []string) []string {
 
-	n, ok := self.index[value]
+	g.mut.Lock()
+	defer g.mut.Unlock()
+
+	g.Add(value, depth)
+	return g.AddChildren(value, children)
+}
+
+func (g *Graph) Add(value string, depth int) *Node { // LOCK
+
+	n, ok := g.index[value]
 
 	if !ok {
-		fmt.Println(value)
-		node := newNode(value, depth)
-		self.index[value] = node
-		self.queue.push(value)
-
-		if value == self.endLabel {
-			self.endNode = node
-			// Stop all workers
-			for i := 0; i < nWorker; i++ {
-				self.stop <- true
-			}
-		}
-
-		return node
-
+		n = NewNode(value, depth)
+		g.index[value] = n
 	} else if depth < n.depth {
 		n.depth = depth
-		n.clearParents()
+		n.ClearParents()
 	}
-	
+
 	return n
 }
 
@@ -97,42 +85,49 @@ func (self *Graph) add(value string, depth int) *Node {
  * Add children to the given node. The children were retrieved by
  * a working by parsing the respective page.
  */
-func (self *Graph) addChildren(value string, children []string) {
+func (g *Graph) AddChildren(value string, children []string) []string {
 
-	self.mut.Lock()
-	defer self.mut.Unlock()
-
-	n, ok := self.index[value]
+	n, ok := g.index[value]
+	newChildren := make([]string, 0)
 	
 	if ok {
-		for _, v := range children {
-			if c := self.add(v, n.depth + 1); n.depth < c.depth {
-				c.addParent(n)
+		for _, c := range children {
+			if child := g.Add(c, n.depth + 1); n.depth < child.depth {
+				child.AddParent(n)
+				newChildren = append(newChildren, c)
 			}
 		}
 	}
+
+	return newChildren
 }
 
-/**
- * Pops the next page to fetch and parse.
- */
-func (self *Graph) pop() (string, error) {
-	self.mut.Lock()
-	defer self.mut.Unlock()
-	return self.queue.pop()
+func (g *Graph) GetPath(head string) string {
+
+	nodes := make([]string, 0)
+
+	current, ok := g.index[head]
+	for ok {
+		nodes = append(nodes, current.value)
+		if len(current.parents) == 0 {
+			break
+		}
+		current = current.parents[0]
+	}
+
+	return strings.Join(nodes, "\n")
+}
+
+func (g Graph) Len() int {
+	return len(g.index)
 }
 
 /**
  * Create a new Graph
  */
-func newGraph() (g *Graph) {
-	g = &Graph {
-		mut: new(sync.Mutex),
-		index: make(map[string]*Node),
-		queue: newQueue(),
-		stop: make(chan bool, nWorker),
-		endLabel: "",
-		endNode: nil,
+func NewGraph() *Graph {
+	return &Graph{
+		make(map[string]*Node),
+		new(sync.Mutex),
 	}
-	return
 }
